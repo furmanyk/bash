@@ -8,7 +8,7 @@
 #   DESCRIPTION:
 #
 #       OPTIONS:  ---
-#  REQUIREMENTS:  xxd, diff, sed, awk, logger, timeout, file, date
+#  REQUIREMENTS:  xxd, diff, sed, awk, logger, timeout, file, date, mail
 #          BUGS:  ---
 #         NOTES:  ---
 #        AUTHOR: Furmanyuk Evgeniy (),
@@ -120,14 +120,15 @@ function rotateDiff {
   DIFF_PATH=$1
   DIFF_PREF=$2
   # листим все файлы , и если файлов больше чем MAX_DIFF то уадляем самый старый
-  # если это сетевая директория, например NFS, то листинг может уйти за пределы допустимого времени
+  # если это сетевая директория, например NFS, то листинг может уйти за пределы допустимого времени, поэтому
+  # запускаем через timeout
   DIFF_DEL=`timeout --kill-after=$((TIMEOUT+1)) ${TIMEOUT} ls -at1 ${DIFF_PATH}/${DIFF_PREF}*\.[0-9]* | awk 'END { if (FNR > '$((MAX_DIFF-1))' ) print}'`
   rm -f ${DIFF_DEL}
 }
 
 function mayIStart {
   # проверяем наличие всех необходимых утилит
-  for UTIL in logger awk xxd diff timeout sed file date
+  for UTIL in logger awk xxd diff timeout sed file date mail
   do
     ${UTIL} --version &>/dev/null || { echo >&2 "[$(date)] Error: ${UTIL} not found, exiting." ; exit 1;  }
   done
@@ -159,6 +160,23 @@ function err {
   fi
   exit 2
 }
+
+function printHelp {
+
+  echo "Usage: $0 -f file"
+  echo ""
+  echo "Save the history of file changes. Ignore when passed less 60s before changes."
+  echo "Create only 24 copies, more than remove oldest."
+  echo "For history creates a \"standard\"-file."
+  echo ""
+  echo "-f absolute or relative path watching file"
+  echo "-m mail user"
+  echo "-p path to save history files"
+  echo "-d prefix for history files"
+  echo "-e prefix for \"standard\"-file"
+  echo ""
+
+}
 #
 # End block functions
 #===============================================================================
@@ -171,19 +189,34 @@ for pid in $(pidof -x `basename $0`); do
     fi
 done
 
+
 # файл для снятия истории
-WATCH_FILE=${1:-test.txt}
+WATCH_FILE="test.txt"
 # пользователь, кому пишем письмо в случае ошибок
 # по умолчанию: отсутствует
-MAIL_USER=${2:-}
+MAIL_USER=""
 # путь для хранения слепков истории и эталонного файла
 # по умолчанию: сохраются в директорию с файлом
-DIFF_PATH=${3:-`dirname WATCH_FILE`}
+DIFF_PATH=`dirname WATCH_FILE`
 # префикс для файлов истории
 # по умолчанию .diff_
-DIFF_PREF=${4:-.diff_}
+DIFF_PREF=".diff_"
 # префикс для предыдущей копии файла
-ETALON_PREF=${5:-.etalon_}
+# хранится совместно с файлами истории
+ETALON_PREF="${DIFF_PATH}/.etalon_"
+
+while getopts "f:m:p:d:e:h" opt "$@"
+do
+  case ${opt} in
+    h) printHelp; exit 4; ;;
+    f) WATCH_FILE=${OPTARG};;
+    m) MAIL_USER=${OPTARG} ;;
+    p) DIFF_PATH=${OPTARG} ;;
+    d) DIFF_PREF=${OPTARG} ;;
+    e) ETALON_PREF=${OPTARG} ;;
+    *) echo >&2 "Unknown options"; exit 3; ;;
+  esac
+done
 ETALON_FILE="${DIFF_PATH}/${ETALON_PREF}`basename ${WATCH_FILE}`"
 
 mayIStart   ${DIFF_PATH}  ${DIFF_PREF}
