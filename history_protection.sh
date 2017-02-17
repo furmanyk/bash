@@ -19,7 +19,6 @@
 #===============================================================================
 
 set -o nounset
-set -x
 
 # время отведенное на сохранение истории
 TIMEOUT=10
@@ -45,28 +44,28 @@ function prepareDiff {
 
   # проверяем наличие файла
   test -f ${FILE}  || err "Error: ${FILE} not found or inaccessible"
+  # проверяем наличие директории для хранения истории
+  test -d ${DIFF} || err "Error: ${DIFF} not found or is not directory"
   # проверяем наличие эталонного-файла
   if [ ! -f ${ETALON} ]; then
     # не нашли - создаем
     timeout --kill-after=$((TIMEOUT+1)) ${TIMEOUT} cp ${FILE} ${ETALON} &> /dev/null || err "Error: can't copy to ${ETALON}"
+
     log "First run - init etalon"
     exit 0
   fi
-  # проверяем наличие директории для хранения истории
-  test -d ${DIFF} || err "Error: ${DIFF} not found or is not directory"
 }
 
 function processDiff {
-  FILE=$1   # оригинальный файл
-  ETALON=$2 # предыдущая копия
-  DIFF=$3   # куда сохранять историю
-  PREF=$4   # префикс для файлов истории
+  FILE=$1    # оригинальный файл
+  ETALON=$2  # предыдущая копия
+  PREDIFF=$3 # начало имени файла истории
 
   # timestamp как постфикс для файлов истории
   CTIME=`date +%s`
-  DIFF_FILE="${DIFF}/${PREF}`basename ${FILE}`.${CTIME}"
+  DIFF_FILE="${PREDIFF}.${CTIME}"
   # lock-файл для гарантии целостности
-  DIFF_LOCK="${DIFF}/${PREF}`basename ${FILE}.lock`"
+  DIFF_LOCK="${PREDIFF}.lock"
 
   # проверяем наличие lock-файла и создаем его
   test -f ${DIFF_LOCK} && err "Error: somebody already processing diff, found lock - ${DIFF_LOCK}"
@@ -117,12 +116,11 @@ function processDiff {
 }
 
 function rotateDiff {
-  DIFF_PATH=$1
-  DIFF_PREF=$2
+  PREDIFF=$1
   # листим все файлы , и если файлов больше чем MAX_DIFF то уадляем самый старый
   # если это сетевая директория, например NFS, то листинг может уйти за пределы допустимого времени, поэтому
   # запускаем через timeout
-  DIFF_DEL=`timeout --kill-after=$((TIMEOUT+1)) ${TIMEOUT} ls -at1 ${DIFF_PATH}/${DIFF_PREF}*\.[0-9]* | awk 'END { if (FNR > '$((MAX_DIFF-1))' ) print}'`
+  DIFF_DEL=`timeout --kill-after=$((TIMEOUT+1)) ${TIMEOUT} ls -at1 ${PREDIFF}\.[0-9]* 2> /dev/null | awk 'END { if (FNR > '$((MAX_DIFF-1))' ) print}'`
   rm -f ${DIFF_DEL}
 }
 
@@ -133,10 +131,9 @@ function mayIStart {
     ${UTIL} --version &>/dev/null || { echo >&2 "[$(date)] Error: ${UTIL} not found, exiting." ; exit 1;  }
   done
 
-  DIFF_PATH=$1
-  DIFF_PREF=$2
+  PREDIFF=$1
   # выбираем последний измененный файл
-  DIFF_LAST=`timeout --kill-after=$((TIMEOUT+1)) ${TIMEOUT} ls -at1 ${DIFF_PATH}/${DIFF_PREF}*\.[0-9]* | head -1`
+  DIFF_LAST=`timeout --kill-after=$((TIMEOUT+1)) ${TIMEOUT} ls -at1 ${PREDIFF}\.[0-9]* 2> /dev/null | head -1`
   # выцепляем timestamp создания файла из постфикса в имени файла
   PTIME=`echo ${DIFF_LAST} | sed s/'.*\.'//g`
   # если прошло меньше 60 секунд выходим
@@ -197,13 +194,13 @@ WATCH_FILE="test.txt"
 MAIL_USER=""
 # путь для хранения слепков истории и эталонного файла
 # по умолчанию: сохраются в директорию с файлом
-DIFF_PATH=`dirname WATCH_FILE`
+DIFF_PATH="/tmp"
 # префикс для файлов истории
 # по умолчанию .diff_
 DIFF_PREF=".diff_"
 # префикс для предыдущей копии файла
 # хранится совместно с файлами истории
-ETALON_PREF="${DIFF_PATH}/.etalon_"
+ETALON_PREF=".etalon_"
 
 while getopts "f:m:p:d:e:h" opt "$@"
 do
@@ -217,11 +214,18 @@ do
     *) echo >&2 "Unknown options"; exit 3; ;;
   esac
 done
-ETALON_FILE="${DIFF_PATH}/${ETALON_PREF}`basename ${WATCH_FILE}`"
 
-mayIStart   ${DIFF_PATH}  ${DIFF_PREF}
+# формируем путь эталонный файл
+ETALON_FILE="${DIFF_PATH}/${ETALON_PREF}`basename ${WATCH_FILE}`"
+# где будет распологаться файл истории
+PREDIFF=${DIFF_PATH}/${DIFF_PREF}`basename ${FILE}`
+
+# проверяем все ли условия выполнены для продолжения выполнения
+mayIStart   ${PREDIFF}
+# делаем все необходимые подготовки, такие как проверка наличия эталонного файла
 prepareDiff ${WATCH_FILE} ${ETALON_FILE} ${DIFF_PATH}
-rotateDiff  ${DIFF_PATH}  ${DIFF_PREF}
-processDiff ${WATCH_FILE} ${ETALON_FILE} ${DIFF_PATH} ${DIFF_PREF}
+# удаляем старые если файлов истории больше чем ${MAX_DIFF}
+rotateDiff  ${PREDIFF}
+processDiff ${WATCH_FILE} ${ETALON_FILE} ${PREDIFF}
 
 
